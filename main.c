@@ -20,9 +20,9 @@
 
 #include "log.h"
 
-#define FTP_PORT 2121
 #define BUFF_SIZE 1024
 static const char* FTP_IP;
+static int FTP_PORT;
 static int FTP_BYTES_PER_SEC;  // 流量控制, 每second多少byte
 
 typedef struct {
@@ -802,8 +802,6 @@ int FTPConnect(const char* addr, int port) {
         exit(EXIT_FAILURE);
     }
 
-    // setNonblock(sock_fd);
-
     return sock_fd;
 }
 
@@ -837,11 +835,19 @@ int FTPOpenDataSockfd(int ftp_ctl_fd) {
 }
 
 int main(int argc, const char* argv[]) {
+    // 提供IP
     if (argc < 2) {
-        LOGE("Need one paraments.\n");
+        LOGE("At least need one paraments.\n");
         exit(EXIT_FAILURE);
     }
     FTP_IP = argv[1];
+    // 提供port
+    if (argc >= 3) {
+        FTP_PORT = atoi(argv[2]);
+    } else {
+        FTP_PORT = 21;  // 默认FTP控制端口
+    }
+    LOGI("FTP Address: %s:%d\n", FTP_IP, FTP_PORT);
     int ftp_ctl_fd = FTPConnect(FTP_IP, FTP_PORT);
 
     // 读取服务器欢迎信息
