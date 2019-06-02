@@ -1,7 +1,7 @@
 /*
     FTP指令: http://www.nsftools.com/tips/RawFTP.htm
     支持指令
-    cd, list, pwd, mkdir, put, get, setlimit,
+    cd, list, pwd, mkdir, put, get, setlimit, size
     delete, rmdir, rename, ascii, binary, quit
 */
 #include <stdio.h>
@@ -37,12 +37,13 @@ int FTPPort(int ftp_ctl_fd, int p1, int p2);
 
 int FTPRest(int ftp_ctl_fd, long int offset);
 int FTPStor(int ftp_ctl_fd, const char* filename);
+int FTPAppe(int ftp_ctl_fd, const char* filename);
 int FTPRetr(int ftp_ctl_fd, const char* filename);
 int FTPCd(int ftp_ctl_fd, char* path);
 int FTPList(int ftp_ctl_fd);
 int FTPPwd(int ftp_ctl_fd);
 int FTPMkdir(int ftp_ctl_fd, const char* dirname);
-int FTPSize(int ftp_ctl_fd, const char* filename);
+long FTPSize(int ftp_ctl_fd, const char* filename);
 int FTPDele(int ftp_ctl_fd, const char* filename);
 int FTPRmd(int ftp_ctl_fd, const char* dirname);
 int FTPRename(int ftp_ctl_fd, const char* oldfilename, const char* newfilename);
@@ -126,7 +127,7 @@ int FTPRest(int ftp_ctl_fd, long int offset) {
     sprintf(send_buf, "REST %ld\r\n", offset);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("REST failed. >> %s", recv_buf);
+        printf("<< REST failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -140,7 +141,7 @@ int FTPPasv(int ftp_ctl_fd) {
     sprintf(send_buf, "PASV\r\n");
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("PASV failed.\n");
+        printf("<< PASV failed. %s\n", recv_buf);
         return -1;
     }
     int port = -1, h1, h2, h3, h4, p1, p2;
@@ -158,7 +159,10 @@ int FTPPort(int ftp_ctl_fd, int p1, int p2) {
     sscanf(FTP_IP, "%d.%d.%d.%d", &h1, &h2, &h3, &h4);
     sprintf(send_buf, "PORT %d,%d,%d,%d,%d,%d\r\n", h1, h2, h3, h4, p1, p2);
     FTPCommand(ftp_ctl_fd);
-    LOGI("%s", recv_buf);
+    if (FTPCheckResponse(recv_buf)) {
+        printf("<< PORT failed. %s", recv_buf);
+        return -1;
+    }
     return 0;
 }
 
@@ -170,7 +174,21 @@ int FTPStor(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "STOR %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("STOR failed. >> %s", recv_buf);
+        printf("<< STOR failed. %s", recv_buf);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+    命令 "APPE filename\r\n"
+    上传添加到指定文件末尾
+*/
+int FTPAppe(int ftp_ctl_fd, const char* filename) {
+    sprintf(send_buf, "APPE %s\r\n", filename);
+    FTPCommand(ftp_ctl_fd);
+    if (FTPCheckResponse(recv_buf)) {
+        printf("<< APPE failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -184,7 +202,7 @@ int FTPRetr(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "RETR %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("RETR failed. >> %s", recv_buf);
+        printf("<< RETR failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -205,7 +223,7 @@ int FTPCd(int ftp_ctl_fd, char* dirname) {
     sprintf(send_buf, "CWD %s\r\n", dirname);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("CWD failed. >> %s", recv_buf);
+        printf("<< CWD failed. %s", recv_buf);
         return -1;
     }
     // printf("cd %s ok.\n", dirname);
@@ -226,15 +244,24 @@ int FTPList(int ftp_ctl_fd) {
     FTPCommand(ftp_ctl_fd);
     // 125 Data connection already open. Transfer starting.
     if (FTPCheckResponse(recv_buf)) {
-        printf("LIST failed. >> %s", recv_buf);
+        printf("<< LIST failed. %s", recv_buf);
         close(ftp_data_fd);
         return -1;
     }
 
     // read data
-    memset(recv_buf, 0, sizeof(recv_buf));
-    read(ftp_data_fd, recv_buf, BUFF_SIZE);
-    printf("%s", recv_buf);
+    int nread;
+    for (;;) {
+        /* data to read from socket */
+        if ((nread = read(ftp_data_fd, recv_buf, BUFF_SIZE)) < 0)
+            printf("<< recv error\n");
+        else if (nread == 0)
+            break;
+
+        if (write(STDOUT_FILENO, recv_buf, nread) != nread)
+            printf("<< send error to stdout\n");
+    }
+
     // 关闭数据套接字
     close(ftp_data_fd);
 
@@ -243,7 +270,7 @@ int FTPList(int ftp_ctl_fd) {
     read(ftp_ctl_fd, recv_buf, BUFF_SIZE);
     // LOGI("%s", recv_buf);
     if (FTPCheckResponse(recv_buf)) {
-        printf("LIST failed. >> %s", recv_buf);
+        printf("<< LIST failed. %s", recv_buf);
         return -1;
     }
 
@@ -259,7 +286,7 @@ int FTPPwd(int ftp_ctl_fd) {
     sprintf(send_buf, "PWD\r\n");
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("PWD failed. >> %s", recv_buf);
+        printf("<< PWD failed. %s", recv_buf);
         return -1;
     }
     // 去除开头的response code
@@ -276,7 +303,7 @@ int FTPMkdir(int ftp_ctl_fd, const char* dirname) {
     sprintf(send_buf, "MKD %s\r\n", dirname);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("MKD failed. >> %s", recv_buf);
+        printf("<< MKD failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -287,14 +314,14 @@ int FTPMkdir(int ftp_ctl_fd, const char* dirname) {
     客户端发送命令从服务器端得到下载文件的大小
     客户端接收服务器的响应码和信息，正常为 "213 <size>"
 */
-int FTPSize(int ftp_ctl_fd, const char* filename) {
+long FTPSize(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "SIZE %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("SIZE failed. >> %s", recv_buf);
+        printf("<< SIZE failed. %s", recv_buf);
         return -1;
     }
-    return 0;
+    return atol(skipResponseCode(recv_buf));
 }
 
 /*
@@ -305,7 +332,7 @@ int FTPDele(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "DELE %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("DELE failed. >> %s", recv_buf);
+        printf("<< DELE failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -319,7 +346,7 @@ int FTPRmd(int ftp_ctl_fd, const char* dirname) {
     sprintf(send_buf, "RMD %s\r\n", dirname);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("RMD failed. >> %s", recv_buf);
+        printf("<< RMD failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -338,13 +365,13 @@ int FTPRename(int ftp_ctl_fd,
     sprintf(send_buf, "RNFR %s\r\n", oldfilename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("RNFR failed. >> %s", recv_buf);
+        printf("<< RNFR failed. %s", recv_buf);
         return -1;
     }
     sprintf(send_buf, "RNTO %s\r\n", newfilename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("RNTO failed. >> %s", recv_buf);
+        printf("<< RNTO failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -360,7 +387,7 @@ int FTPAscii(int ftp_ctl_fd) {
     sprintf(send_buf, "TYPE A\r\n");
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("TYPE A failed. >> %s", recv_buf);
+        printf("<< TYPE A failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -376,7 +403,7 @@ int FTPBinary(int ftp_ctl_fd) {
     sprintf(send_buf, "TYPE I\r\n");
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("TYPE I failed. >> %s", recv_buf);
+        printf("<< TYPE I failed. %s", recv_buf);
         return -1;
     }
     return 0;
@@ -392,7 +419,7 @@ int FTPQuit(int ftp_ctl_fd) {
     sprintf(send_buf, "QUIT\r\n");
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("QUIT failed. >> %s", recv_buf);
+        printf("<< QUIT failed. %s", recv_buf);
         return -1;
     }
     printf("%s", skipResponseCode(recv_buf));
@@ -444,10 +471,12 @@ int FTPTransmit(int dest_fd, int src_fd, void* trans_buf) {
     // 客户端通过数据连接 从服务器接收文件内容
     while (1) {
         if (FTP_BYTES_PER_SEC > 0) {
-            sleep(1);
             nx_time = time(NULL);
+            while (nx_time - cur_time < 1) {
+                usleep(200000);  // 休眠200ms
+                nx_time = time(NULL);
+            }
             limit_bytes = (nx_time - cur_time) * FTP_BYTES_PER_SEC;
-            limit_bytes *= 2;  // 补偿 sleep 1 sec
             cur_time = nx_time;
         }
         nleft = limit_bytes;
@@ -493,14 +522,62 @@ int FTPPut(int ftp_ctl_fd, const char* filename, const char* newfilename) {
         return -1;
     }
 
-    // 传输上传文件指令 STOR
-    if (FTPStor(ftp_ctl_fd, newfilename) == -1) {
-        close(ftp_data_fd);
+    /* 客户端打开文件并判断是否断点续传 */
+    int file_handle = open(filename, O_RDONLY, 0);
+    if (file_handle < 0) {
+        LOGE("open error!\n");
         return -1;
     }
+    long int ftp_file_size = -1;
+    if ((ftp_file_size = FTPSize(ftp_ctl_fd, filename)) != -1) {
+        // 存在文件 断点续传
+        int err = 0;     // 错误标示
+        int resume = 0;  // 恢复到覆盖上传模式
+        long int offset = 0;
+        if ((offset = lseek(file_handle, 0, SEEK_END)) != -1) {
+            if (offset == ftp_file_size) {
+                // 文件大小相同认为文件相同
+                printf("File exists.\n");
+                err = 1;
+            } else if (offset < ftp_file_size) {
+                // 不相同文件 需要覆盖
+                // 传输上传文件指令 STOR
+                resume = 1;
 
-    /* 客户端打开文件 */
-    int file_handle = open(filename, O_RDONLY, 0);
+                if (!err && FTPStor(ftp_ctl_fd, newfilename) == -1) {
+                    err = 1;
+                }
+            }
+            // 定位本地文件offset到续传处
+            if ((offset = lseek(file_handle, ftp_file_size, SEEK_SET)) == -1) {
+                LOGE("lseek error.\n");
+                err = 1;
+            }
+            // 如果断点续传失败 则取消下载
+            if (!err && !resume && FTPAppe(ftp_ctl_fd, newfilename) == -1) {
+                printf("APPE resume from break-point failed.\n");
+                err = 1;
+            }
+
+        } else {
+            err = 1;
+            LOGE("lseek failed.\n");
+        }
+
+        if (err && !resume) {
+            close(ftp_data_fd);
+            close(file_handle);
+            return -1;
+        }
+    } else {
+        // 不存在文件
+        // 传输上传文件指令 STOR
+        if (FTPStor(ftp_ctl_fd, newfilename) == -1) {
+            close(file_handle);
+            close(ftp_data_fd);
+            return -1;
+        }
+    }
 
     FTPTransmit(ftp_data_fd, file_handle, send_buf);
 
@@ -545,9 +622,13 @@ int FTPGet(int ftp_ctl_fd, const char* filename, const char* newfilename) {
     // 如果文件存在 断点续传
     int file_handle = -1;
     if (access(newfilename, F_OK) == 0) {
-        long int offset = 0;
         file_handle = open(newfilename, O_WRONLY | O_APPEND);
+        if (file_handle < 0) {
+            LOGE("open error!\n");
+            return -1;
+        }
         int err = 0;  // 错误标示
+        long int offset = 0;
         if ((offset = lseek(file_handle, 0, SEEK_END)) != -1) {
             if (offset == ftp_file_size) {
                 printf("File exists.\n");
@@ -555,7 +636,7 @@ int FTPGet(int ftp_ctl_fd, const char* filename, const char* newfilename) {
             }
             // 如果断点续传失败 则取消下载
             if (!err && FTPRest(ftp_ctl_fd, offset) == -1) {
-                printf("Resume from break-point failed.\n");
+                printf("STOR resume from break-point failed.\n");
                 err = 1;
             }
         } else {
@@ -569,6 +650,10 @@ int FTPGet(int ftp_ctl_fd, const char* filename, const char* newfilename) {
         }
     } else {
         file_handle = open(newfilename, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (file_handle < 0) {
+            LOGE("open error!\n");
+            return -1;
+        }
     }
 
     // 传输下载文件指令 RETR
@@ -681,7 +766,7 @@ int FTPParseCommand(int ftp_ctl_fd, const char* cmd) {
             flag2 = 0;
         }
         if (!flag1 && !flag2) {
-            printf("Invalid instruction: %s => rename ?\n", cmd_tok);
+            printf("Invalid instruction: %s => rename or rmdir ?\n", cmd_tok);
             return -1;
         }
 
@@ -719,12 +804,30 @@ int FTPParseCommand(int ftp_ctl_fd, const char* cmd) {
             exit(EXIT_SUCCESS);
         }
         break;
+    /* size, setlimit */
     case 's':
+        flag1 = 1, flag2 = 1;
+        if (strncmp(cmd_tok, "size", 4) != 0) {
+            flag1 = 0;
+        }
         if (strncmp(cmd_tok, "setlimit", 8) != 0) {
-            printf("Invalid instruction: %s => setlimit ?\n", cmd_tok);
+            flag2 = 0;
+        }
+        if (!flag1 && !flag2) {
+            printf("Invalid instruction: %s => size or setlimit ?\n", cmd_tok);
             return -1;
         }
-        FTPSetRateLimit(atof(params1));
+
+        if (flag1) { /* size */
+            FTPBinary(ftp_ctl_fd);
+            long file_sz = -1;
+            if ((file_sz = FTPSize(ftp_ctl_fd, params1)) != -1) {
+                printf("%ld\n", file_sz);
+            }
+        }
+        if (flag2) { /* setlimit */
+            FTPSetRateLimit(atof(params1));
+        }
         break;
     default:
         printf("Unknown command.\n");
