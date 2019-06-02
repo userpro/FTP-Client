@@ -45,8 +45,8 @@ int FTPPort(int ftp_ctl_fd, int p1, int p2);
 int FTPRest(int ftp_ctl_fd, long int offset);
 int FTPStor(int ftp_ctl_fd, const char* filename);
 int FTPRetr(int ftp_ctl_fd, const char* filename);
-int FTPCd(int ftp_ctl_fd, const char* path);
-int FTPList(int ftp_ctl_fd, const char* path);
+int FTPCd(int ftp_ctl_fd, char* path);
+int FTPList(int ftp_ctl_fd, char* path);
 int FTPPwd(int ftp_ctl_fd);
 int FTPMkdir(int ftp_ctl_fd, const char* dirname);
 int FTPSize(int ftp_ctl_fd, const char* filename);
@@ -60,6 +60,7 @@ int FTPQuit(int ftp_ctl_fd);
 /* FTP 操作 */
 void FTPSetRateLimit(double ftp_rate_limit_kb);
 void FTPCommand(int ftp_ctl_fd);
+int FTPCheckResponse(const char* response);
 int FTPTransmit(int dest_fd, int src_fd, void* trans_buf);
 int FTPGet(int ftp_ctl_fd, const char* path, const char* newpath);
 int FTPPut(int ftp_ctl_fd, const char* path, const char* newpath);
@@ -151,13 +152,11 @@ const char* skipResponseCode(const char* response) {
 
 /*
     命令 "REST offset\r\n"
-    响应 "350 Restarting at <position>. Send STORE or RETRIEVE to initiate
-   transfer."
 */
 int FTPRest(int ftp_ctl_fd, long int offset) {
     sprintf(send_buf, "REST %ld\r\n", offset);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "350", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("REST failed. >> %s", recv_buf);
         return -1;
     }
@@ -166,13 +165,12 @@ int FTPRest(int ftp_ctl_fd, long int offset) {
 
 /*
     命令 "PASV\r\n"
-    响应 "227 Command okay."
     客户端发送命令改变FTP数据模式为被动模式
 */
 int FTPPasv(int ftp_ctl_fd) {
     sprintf(send_buf, "PASV\r\n");
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "227", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("PASV failed.\n");
         return -1;
     }
@@ -197,13 +195,12 @@ int FTPPort(int ftp_ctl_fd, int p1, int p2) {
 
 /*
     命令 "STOR filename\r\n"
-    响应 "125 Data connection already open. Transfer starting."
     客户端发送命令上传文件至服务器端
 */
 int FTPStor(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "STOR %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "125", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("STOR failed. >> %s", recv_buf);
         return -1;
     }
@@ -212,13 +209,12 @@ int FTPStor(int ftp_ctl_fd, const char* filename) {
 
 /*
     命令 "RETR filename\r\n"
-    响应 "125 Data connection already open. Transfer starting."
     客户端发送命令从服务器端下载文件
 */
 int FTPRetr(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "RETR %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "125", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("RETR failed. >> %s", recv_buf);
         return -1;
     }
@@ -229,12 +225,17 @@ int FTPRetr(int ftp_ctl_fd, const char* filename) {
     命令 "CWD dirname\r\n"
     客户端发送命令改变工作目录
     客户端接收服务器的响应码和信息
-    正常为 "250 Command okay."
 */
-int FTPCd(int ftp_ctl_fd, const char* dirname) {
+int FTPCd(int ftp_ctl_fd, char* dirname) {
+    // 当dirname为空时, 设置为 "."
+    if (strlen(dirname) == 0) {
+        dirname[0] = '.';
+        dirname[1] = '\0';
+    }
+    printf("<< CWD %s\n", dirname);
     sprintf(send_buf, "CWD %s\r\n", dirname);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "250", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("CWD failed. >> %s", recv_buf);
         return -1;
     }
@@ -249,14 +250,18 @@ int FTPCd(int ftp_ctl_fd, const char* dirname) {
     正常为 "125 Data connection already open. Transfer starting."
     结束为 "226 Transfer complete."
 */
-int FTPList(int ftp_ctl_fd, const char* path) {
+int FTPList(int ftp_ctl_fd, char* path) {
     // 打开数据传输套接字
     int ftp_data_fd = FTPOpenDataSockfd(ftp_ctl_fd);
-
+    // 如果path为空 则设置为当前路径"."
+    if (strlen(path) == 0) {
+        path[0] = '.';
+        path[1] = '\0';
+    }
     sprintf(send_buf, "LIST %s\r\n", path);
     FTPCommand(ftp_ctl_fd);
     // 125 Data connection already open. Transfer starting.
-    if (strncmp(recv_buf, "125", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("LIST failed. >> %s", recv_buf);
         close(ftp_data_fd);
         return -1;
@@ -273,12 +278,11 @@ int FTPList(int ftp_ctl_fd, const char* path) {
     memset(recv_buf, 0, sizeof(recv_buf));
     read(ftp_ctl_fd, recv_buf, BUFF_SIZE);
     // LOGI("%s", recv_buf);
-    if (strncmp(recv_buf, "226", 3) != 0) {
-        printf("LIST failed. [%s]", recv_buf);
+    if (FTPCheckResponse(recv_buf)) {
+        printf("LIST failed. >> %s", recv_buf);
         return -1;
     }
 
-    // printf("LIST %s ok.\n", path);
     return 0;
 }
 
@@ -286,12 +290,11 @@ int FTPList(int ftp_ctl_fd, const char* path) {
     命令 "pwd\r\n"
     客户端发送命令获取当前所在路径
     客户端接收服务器的响应码和信息
-    正常为 "257 "%s" is the current directory."
 */
 int FTPPwd(int ftp_ctl_fd) {
     sprintf(send_buf, "PWD\r\n");
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "257", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("PWD failed. >> %s", recv_buf);
         return -1;
     }
@@ -303,13 +306,12 @@ int FTPPwd(int ftp_ctl_fd) {
 
 /*
     命令 "MKD dirname\r\n"
-    响应 "257 \"%s\" directory created."
     创建目录
 */
 int FTPMkdir(int ftp_ctl_fd, const char* dirname) {
     sprintf(send_buf, "MKD %s\r\n", dirname);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "257", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("MKD failed. >> %s", recv_buf);
         return -1;
     }
@@ -324,7 +326,7 @@ int FTPMkdir(int ftp_ctl_fd, const char* dirname) {
 int FTPSize(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "SIZE %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "213", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("SIZE failed. >> %s", recv_buf);
         return -1;
     }
@@ -333,13 +335,12 @@ int FTPSize(int ftp_ctl_fd, const char* filename) {
 
 /*
     命令 "DELE filename\r\n"
-    响应 "250 File removed."
     创建目录
 */
 int FTPDele(int ftp_ctl_fd, const char* filename) {
     sprintf(send_buf, "DELE %s\r\n", filename);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "250", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("DELE failed. >> %s", recv_buf);
         return -1;
     }
@@ -348,13 +349,12 @@ int FTPDele(int ftp_ctl_fd, const char* filename) {
 
 /*
     命令 "RMD dirname\r\n"
-    响应 "250 Directory removed."
     创建目录
 */
 int FTPRmd(int ftp_ctl_fd, const char* dirname) {
     sprintf(send_buf, "RMD %s\r\n", dirname);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "250", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("RMD failed. >> %s", recv_buf);
         return -1;
     }
@@ -378,13 +378,13 @@ int FTPRename(int ftp_ctl_fd, const char* path, const char* newfilename) {
 
     sprintf(send_buf, "RNFR %s\r\n", oldfilename);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "350", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("RNFR failed. >> %s", recv_buf);
         return -1;
     }
     sprintf(send_buf, "RNTO %s\r\n", newfilename);
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "250", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("RNTO failed. >> %s", recv_buf);
         return -1;
     }
@@ -400,7 +400,7 @@ int FTPRename(int ftp_ctl_fd, const char* path, const char* newfilename) {
 int FTPAscii(int ftp_ctl_fd) {
     sprintf(send_buf, "TYPE A\r\n");
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "200", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("TYPE A failed. >> %s", recv_buf);
         return -1;
     }
@@ -416,7 +416,7 @@ int FTPAscii(int ftp_ctl_fd) {
 int FTPBinary(int ftp_ctl_fd) {
     sprintf(send_buf, "TYPE I\r\n");
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "200", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("TYPE I failed. >> %s", recv_buf);
         return -1;
     }
@@ -432,7 +432,7 @@ int FTPBinary(int ftp_ctl_fd) {
 int FTPQuit(int ftp_ctl_fd) {
     sprintf(send_buf, "QUIT\r\n");
     FTPCommand(ftp_ctl_fd);
-    if (strncmp(recv_buf, "221", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("QUIT failed. >> %s", recv_buf);
         return -1;
     }
@@ -453,6 +453,23 @@ void FTPSetRateLimit(double ftp_rate_limit_kb) {
         FTP_BYTES_PER_SEC = -1;
     } else {
         FTP_BYTES_PER_SEC = (int) (ftp_rate_limit_kb * 1024);
+    }
+}
+
+/*
+    检查返回值
+    判断命令是否正确执行
+*/
+int FTPCheckResponse(const char* response) {
+    // printf("<< check: %s", response);
+    if (response[0] == '2' || response[0] == '1') {
+        // 202 Command not implemented, superfluous at this site.
+        if (strncmp(response, "202", 3) == 0) return 1;
+        return 0;
+    } else {
+        // 350 Requested file action pending further information U
+        if (strncmp(response, "350", 3) == 0) return 0;
+        return 1;
     }
 }
 
@@ -489,7 +506,7 @@ int FTPTransmit(int dest_fd, int src_fd, void* trans_buf) {
             nleft -= nread;
         }
         total_trans_bytes += limit_bytes - nleft;
-        printf("Alreay transmitted %lld bytes\n", total_trans_bytes);
+        printf("<< Alreay transmitted %lld bytes\n", total_trans_bytes);
         if (flag) {
             break;
         }
@@ -544,8 +561,8 @@ int FTPPut(int ftp_ctl_fd, const char* path, const char* newpath) {
     // 226 Transfer complete.
     memset(recv_buf, 0, sizeof(recv_buf));
     read(ftp_ctl_fd, recv_buf, BUFF_SIZE);
-    LOGI("%s", recv_buf);
-    if (strncmp(recv_buf, "226", 3) != 0) {
+    // LOGI("%s", recv_buf);
+    if (FTPCheckResponse(recv_buf)) {
         printf("STOR failed. >> %s", recv_buf);
         return -1;
     }
@@ -627,7 +644,7 @@ int FTPGet(int ftp_ctl_fd, const char* path, const char* newfilename) {
     memset(recv_buf, 0, sizeof(recv_buf));
     read(ftp_ctl_fd, recv_buf, BUFF_SIZE);
     // LOGI("%s", recv_buf);
-    if (strncmp(recv_buf, "226", 3) != 0) {
+    if (FTPCheckResponse(recv_buf)) {
         printf("RETR failed. >> %s", recv_buf);
         return -1;
     }
@@ -642,6 +659,7 @@ int FTPParseCommand(int ftp_ctl_fd, const char* cmd) {
     int cmd_tok_len = gettoken(cmd, cmd_tok);
     int params1_len = gettoken(cmd + cmd_tok_len + 1, params1);
     int params2_len = gettoken(cmd + cmd_tok_len + params1_len + 1, params2);
+
     // printf("cmd_tok: %s\nparams1: %s\nparams2: %s\n",
     //        cmd_tok,
     //        params1,
@@ -653,6 +671,7 @@ int FTPParseCommand(int ftp_ctl_fd, const char* cmd) {
             printf("Invalid instruction: %s => cd ?\n", cmd_tok);
             return -1;
         }
+
         FTPCd(ftp_ctl_fd, params1);
         break;
     /* list */
@@ -661,6 +680,7 @@ int FTPParseCommand(int ftp_ctl_fd, const char* cmd) {
             printf("Invalid instruction: %s => list ?\n", cmd_tok);
             return -1;
         }
+
         FTPList(ftp_ctl_fd, params1);
         break;
     /* pwd, put */
@@ -774,7 +794,7 @@ void FTPCommand(int ftp_ctl_fd) {
     write(ftp_ctl_fd, send_buf, strlen(send_buf));
     memset(recv_buf, 0, sizeof(recv_buf));
     read(ftp_ctl_fd, recv_buf, BUFF_SIZE);
-    LOGI("%s", recv_buf);
+    printf("<< %s", recv_buf);
 }
 
 int FTPConnect(const char* addr, int port) {
