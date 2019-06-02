@@ -25,14 +25,7 @@ static const char* FTP_IP;
 static int FTP_PORT;
 static int FTP_BYTES_PER_SEC;  // 流量控制, 每second多少byte
 
-typedef struct {
-    char cmd[BUFF_SIZE];
-    char params[BUFF_SIZE];
-} Cmder;
-
 /* 工具函数 */
-int find(const char* str, const char* pattern);
-int parsePath(const char* path, char* dirname, char* filename);
 int gettoken(const char* src, char* res);
 void fflushStdin();
 int getPassword(char* password, int size);
@@ -46,13 +39,13 @@ int FTPRest(int ftp_ctl_fd, long int offset);
 int FTPStor(int ftp_ctl_fd, const char* filename);
 int FTPRetr(int ftp_ctl_fd, const char* filename);
 int FTPCd(int ftp_ctl_fd, char* path);
-int FTPList(int ftp_ctl_fd, char* path);
+int FTPList(int ftp_ctl_fd);
 int FTPPwd(int ftp_ctl_fd);
 int FTPMkdir(int ftp_ctl_fd, const char* dirname);
 int FTPSize(int ftp_ctl_fd, const char* filename);
-int FTPDele(int ftp_ctl_fd, const char* path);
+int FTPDele(int ftp_ctl_fd, const char* filename);
 int FTPRmd(int ftp_ctl_fd, const char* dirname);
-int FTPRename(int ftp_ctl_fd, const char* path, const char* newpath);
+int FTPRename(int ftp_ctl_fd, const char* oldfilename, const char* newfilename);
 int FTPAscii(int ftp_ctl_fd);
 int FTPBinary(int ftp_ctl_fd);
 int FTPQuit(int ftp_ctl_fd);
@@ -62,8 +55,8 @@ void FTPSetRateLimit(double ftp_rate_limit_kb);
 void FTPCommand(int ftp_ctl_fd);
 int FTPCheckResponse(const char* response);
 int FTPTransmit(int dest_fd, int src_fd, void* trans_buf);
-int FTPGet(int ftp_ctl_fd, const char* path, const char* newpath);
-int FTPPut(int ftp_ctl_fd, const char* path, const char* newpath);
+int FTPGet(int ftp_ctl_fd, const char* filename, const char* newfilename);
+int FTPPut(int ftp_ctl_fd, const char* filename, const char* newfilename);
 int FTPConnect(const char* addr, int port);
 int FTPOpenDataSockfd(int ftp_ctl_fd);
 int FTPParseCommand(int ftp_ctl_fd, const char* cmd);
@@ -73,30 +66,6 @@ int FTPLogin(int ftp_ctl_fd, const char* username, const char* password);
 static char recv_buf[BUFF_SIZE], send_buf[BUFF_SIZE];
 
 /* ---------------------------------- */
-
-int find(const char* str, const char* pattern) {
-    const char* src = str;
-    int len = strlen(pattern);
-    while (*src != '\0') {
-        if (*src == *pattern && strncmp(src, pattern, len) == 0) return 0;
-        src++;
-    }
-    return -1;
-}
-
-int parsePath(const char* path, char* dirname, char* filename) {
-    int i;
-    int path_len = strlen(path);
-    for (i = path_len - 1; i >= 0; i--) {
-        if (path[i] == '/' || path[i] == '\\') break;
-    }
-    strcpy(filename, path + i + 1);
-    if (i >= 0) {
-        strncpy(dirname, path, i);
-        dirname[i] = '\0';
-    }
-    return 0;
-}
 
 int gettoken(const char* src, char* res) {
     while (*src == ' ') src++;
@@ -250,15 +219,10 @@ int FTPCd(int ftp_ctl_fd, char* dirname) {
     正常为 "125 Data connection already open. Transfer starting."
     结束为 "226 Transfer complete."
 */
-int FTPList(int ftp_ctl_fd, char* path) {
+int FTPList(int ftp_ctl_fd) {
     // 打开数据传输套接字
     int ftp_data_fd = FTPOpenDataSockfd(ftp_ctl_fd);
-    // 如果path为空 则设置为当前路径"."
-    if (strlen(path) == 0) {
-        path[0] = '.';
-        path[1] = '\0';
-    }
-    sprintf(send_buf, "LIST %s\r\n", path);
+    sprintf(send_buf, "LIST -al\r\n");
     FTPCommand(ftp_ctl_fd);
     // 125 Data connection already open. Transfer starting.
     if (FTPCheckResponse(recv_buf)) {
@@ -368,14 +332,9 @@ int FTPRmd(int ftp_ctl_fd, const char* dirname) {
     响应 "250 Renaming ok."
     重新命名filename
 */
-int FTPRename(int ftp_ctl_fd, const char* path, const char* newfilename) {
-    char dirname[BUFF_SIZE], oldfilename[BUFF_SIZE];
-    parsePath(path, dirname, oldfilename);
-
-    if (FTPCd(ftp_ctl_fd, dirname) == -1) {
-        return -1;
-    }
-
+int FTPRename(int ftp_ctl_fd,
+              const char* oldfilename,
+              const char* newfilename) {
     sprintf(send_buf, "RNFR %s\r\n", oldfilename);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
@@ -506,7 +465,7 @@ int FTPTransmit(int dest_fd, int src_fd, void* trans_buf) {
             nleft -= nread;
         }
         total_trans_bytes += limit_bytes - nleft;
-        printf("<< Alreay transmitted %lld bytes\n", total_trans_bytes);
+        // printf("<< Alreay transmitted %lld bytes\n", total_trans_bytes);
         if (flag) {
             break;
         }
@@ -514,24 +473,16 @@ int FTPTransmit(int dest_fd, int src_fd, void* trans_buf) {
     return 0;
 }
 
-int FTPPut(int ftp_ctl_fd, const char* path, const char* newpath) {
+int FTPPut(int ftp_ctl_fd, const char* filename, const char* newfilename) {
     // 检查本地文件是否存在
-    if (access(path, F_OK) < 0) {
-        printf("%s [No such file or directory.]\n", path);
-        return -1;
-    }
-
-    char dirname[BUFF_SIZE], filename[BUFF_SIZE];
-    // 解析出目标路径和目标文件名
-    parsePath(newpath, dirname, filename);
-
-    if (FTPCd(ftp_ctl_fd, dirname) == -1) {
+    if (access(filename, F_OK) < 0) {
+        printf("%s [No such file or directory.]\n", filename);
         return -1;
     }
 
     // 未给出上传后新的文件名则使用源文件名
-    if (strlen(filename) == 0) {
-        parsePath(path, dirname, filename);
+    if (strlen(newfilename) == 0) {
+        newfilename = filename;
     }
 
     // 连接服务器新开的数据端口
@@ -543,13 +494,13 @@ int FTPPut(int ftp_ctl_fd, const char* path, const char* newpath) {
     }
 
     // 传输上传文件指令 STOR
-    if (FTPStor(ftp_ctl_fd, filename) == -1) {
+    if (FTPStor(ftp_ctl_fd, newfilename) == -1) {
         close(ftp_data_fd);
         return -1;
     }
 
     /* 客户端打开文件 */
-    int file_handle = open(path, O_RDONLY, 0);
+    int file_handle = open(filename, O_RDONLY, 0);
 
     FTPTransmit(ftp_data_fd, file_handle, send_buf);
 
@@ -571,19 +522,12 @@ int FTPPut(int ftp_ctl_fd, const char* path, const char* newpath) {
     return 0;
 }
 
-int FTPGet(int ftp_ctl_fd, const char* path, const char* newfilename) {
-    char dirname[BUFF_SIZE], filename[BUFF_SIZE];
-    parsePath(path, dirname, filename);
-    // LOGI("%s %s %s\n", path, dirname, filename);
-
+int FTPGet(int ftp_ctl_fd, const char* filename, const char* newfilename) {
     // 开启binary模式
     if (FTPBinary(ftp_ctl_fd) == -1) {
         return -1;
     }
 
-    if (FTPCd(ftp_ctl_fd, dirname) == -1) {
-        return -1;
-    }
     if (FTPSize(ftp_ctl_fd, filename) == -1) {
         return -1;
     }
@@ -594,16 +538,15 @@ int FTPGet(int ftp_ctl_fd, const char* path, const char* newfilename) {
     int ftp_data_fd = FTPOpenDataSockfd(ftp_ctl_fd);
 
     // 下载文件是否重命名
-    const char* name = newfilename;
-    if (strlen(name) == 0) {
-        name = filename;
+    if (strlen(newfilename) == 0) {
+        newfilename = filename;
     }
 
     // 如果文件存在 断点续传
     int file_handle = -1;
-    if (access(name, F_OK) == 0) {
+    if (access(newfilename, F_OK) == 0) {
         long int offset = 0;
-        file_handle = open(name, O_WRONLY | O_APPEND);
+        file_handle = open(newfilename, O_WRONLY | O_APPEND);
         int err = 0;  // 错误标示
         if ((offset = lseek(file_handle, 0, SEEK_END)) != -1) {
             if (offset == ftp_file_size) {
@@ -625,7 +568,7 @@ int FTPGet(int ftp_ctl_fd, const char* path, const char* newfilename) {
             return -1;
         }
     } else {
-        file_handle = open(name, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        file_handle = open(newfilename, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     }
 
     // 传输下载文件指令 RETR
@@ -676,12 +619,12 @@ int FTPParseCommand(int ftp_ctl_fd, const char* cmd) {
         break;
     /* list */
     case 'l':
-        if (strncmp(cmd_tok, "list", 4) != 0) {
-            printf("Invalid instruction: %s => list ?\n", cmd_tok);
+        if (strncmp(cmd_tok, "ls", 2) != 0) {
+            printf("Invalid instruction: %s => ls ?\n", cmd_tok);
             return -1;
         }
 
-        FTPList(ftp_ctl_fd, params1);
+        FTPList(ftp_ctl_fd);
         break;
     /* pwd, put */
     case 'p':
@@ -883,7 +826,7 @@ int main(int argc, const char* argv[]) {
         printf("\n");
 
         if (FTPLogin(ftp_ctl_fd, username, password) != -1) {
-            // printf("Login ok.\n");
+            printf("Login ok.\n");
             break;
         }
     }
