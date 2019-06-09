@@ -175,7 +175,7 @@ int FTPPort(int ftp_ctl_fd, const char* port_cmd) {
     int port = p1 * 256 + p2;
     int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (sock_fd < 0) {
-        LOGE("[socket]");
+        LOGE("[socket]\n");
         return -1;
     }
 
@@ -187,19 +187,21 @@ int FTPPort(int ftp_ctl_fd, const char* port_cmd) {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(sock_fd, (struct sockaddr*) &addr, sizeof(addr)) == -1) {
-        LOGE("[bind]");
+        LOGE("[bind]\n");
         return -1;
     }
 
     if (listen(sock_fd, 64) == -1) {
-        LOGE("[listen]");
+        LOGE("[listen]\n");
+        close(sock_fd);
         return -1;
     }
 
     sprintf(send_buf, "PORT %d,%d,%d,%d,%d,%d\r\n", h1, h2, h3, h4, p1, p2);
     FTPCommand(ftp_ctl_fd);
     if (FTPCheckResponse(recv_buf)) {
-        printf("<< PORT failed. %s", recv_buf);
+        printf("<< PORT failed. %s\n", recv_buf);
+        close(sock_fd);
         return -1;
     }
 
@@ -281,7 +283,11 @@ int FTPCd(int ftp_ctl_fd, char* dirname) {
 */
 int FTPList(int ftp_ctl_fd) {
     // 打开数据传输套接字
-    int ftp_data_fd = FTPOpenDataSockfd(ftp_ctl_fd);
+    int ftp_data_fd = -1;
+    // 被动模式
+    if (FTP_DATA_MODE == FTP_PASV_MODE) {
+        ftp_data_fd = FTPOpenDataSockfd(ftp_ctl_fd);
+    }
 
     sprintf(send_buf, "LIST -al\r\n");
     FTPCommand(ftp_ctl_fd);
@@ -290,6 +296,11 @@ int FTPList(int ftp_ctl_fd) {
         printf("<< LIST failed. %s", recv_buf);
         close(ftp_data_fd);
         return -1;
+    }
+
+    // 主动模式
+    if (FTP_DATA_MODE == FTP_PORT_MODE) {
+        ftp_data_fd = FTPOpenDataSockfd(ftp_ctl_fd);
     }
 
     // read data
